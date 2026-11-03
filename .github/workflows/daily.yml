@@ -37,6 +37,8 @@ jobs:
           VNSTOCK_API_KEY: ${{ secrets.VNSTOCK_API_KEY }}
         run: |
           vnstock usage || echo "Quota check unavailable"
+      - name: Generate standalone HTML financial report
+        run: python -m src.html_report
       - name: Pilot public structured financial tables
         run: python -m src.table_source
       - name: Discover public quarterly report candidates
@@ -47,18 +49,18 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add data/ reports/ config/reports.csv
+          git add data/ reports/ config/reports.csv BCTC_Report.html
           if ! git diff --cached --quiet; then
             git commit -m "Daily BCTC scan $(date -u +%F)"
             git pull --rebase origin "${GITHUB_REF_NAME}"
             git push origin HEAD:"${GITHUB_REF_NAME}"
           fi
-      - name: Upload PDF and audit output
+      - name: Upload HTML report and audit output
         uses: actions/upload-artifact@v4
         with:
           name: bctc-daily-${{ github.run_id }}
           path: |
-            reports/*.pdf
+            BCTC_Report.html
             data/scan_log.json
             data/discovery_log.json
             data/table_scan.json
