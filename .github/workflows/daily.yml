@@ -28,6 +28,7 @@ jobs:
         run: |
           vnstock usage || echo "Quota check unavailable; continuing scan"
       - name: Pilot quarterly financial data API
+        continue-on-error: true
         env:
           VNSTOCK_API_KEY: ${{ secrets.VNSTOCK_API_KEY }}
         run: python -m src.api_source
@@ -38,6 +39,7 @@ jobs:
         run: |
           vnstock usage || echo "Quota check unavailable"
       - name: Generate standalone HTML financial report
+        if: always()
         run: python -m src.html_report
       - name: Pilot public structured financial tables
         run: python -m src.table_source
@@ -46,6 +48,7 @@ jobs:
       - name: Analyze discovered documents and create PDF
         run: python -m src.main
       - name: Save state and report to repository
+        if: always()
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -56,6 +59,7 @@ jobs:
             git push origin HEAD:"${GITHUB_REF_NAME}"
           fi
       - name: Upload HTML report and audit output
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bctc-daily-${{ github.run_id }}
