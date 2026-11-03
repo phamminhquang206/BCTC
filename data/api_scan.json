@@ -1,0 +1,29 @@
+{
+  "run_at": "2026-11-03T13:14:30.365134+07:00",
+  "periods_requested": [
+    "2025-Q3",
+    "2026-Q2",
+    "2026-Q3"
+  ],
+  "coverage": "3-ticker API pilot only; values not verified",
+  "results": [
+    {
+      "ticker": "CDC",
+      "source": "vnstock Fundamental (underlying provider selected by library)",
+      "status": "api_error",
+      "error": "Bản vnstock 5.0.1 đã bị tắt. Tạm dừng phát hành bản thử nghiệm\nMáy này (Python 3.12, Linux x86_64) dùng được vnstock 5.2.1. Chạy lệnh sau để cập nhật:\n    /opt/hostedtoolcache/Python/3.12.15/x64/bin/python -m pip install --extra-index-url https://vnstocks.com/api/packages vnstock==5.2.1\nCập nhật xong, khởi động lại Python rồi chạy lại đoạn mã.\n\nvnstock 5.0.1 has been switched off. Tạm dừng phát hà"
+    },
+    {
+      "ticker": "VNR",
+      "source": "vnstock Fundamental (underlying provider selected by library)",
+      "status": "api_error",
+      "error": "Bản vnstock 5.0.1 đã bị tắt. Tạm dừng phát hành bản thử nghiệm\nMáy này (Python 3.12, Linux x86_64) dùng được vnstock 5.2.1. Chạy lệnh sau để cập nhật:\n    /opt/hostedtoolcache/Python/3.12.15/x64/bin/python -m pip install --extra-index-url https://vnstocks.com/api/packages vnstock==5.2.1\nCập nhật xong, khởi động lại Python rồi chạy lại đoạn mã.\n\nvnstock 5.0.1 has been switched off. Tạm dừng phát hà"
+    },
+    {
+      "ticker": "FPT",
+      "source": "vnstock Fundamental (underlying provider selected by library)",
+      "status": "api_error",
+      "error": "Bản vnstock 5.0.1 đã bị tắt. Tạm dừng phát hành bản thử nghiệm\nMáy này (Python 3.12, Linux x86_64) dùng được vnstock 5.2.1. Chạy lệnh sau để cập nhật:\n    /opt/hostedtoolcache/Python/3.12.15/x64/bin/python -m pip install --extra-index-url https://vnstocks.com/api/packages vnstock==5.2.1\nCập nhật xong, khởi động lại Python rồi chạy lại đoạn mã.\n\nvnstock 5.0.1 has been switched off. Tạm dừng phát hà"
+    }
+  ]
+}
