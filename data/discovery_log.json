@@ -1,11 +1,11 @@
 {
-  "time": "2026-11-03T11:52:27.229144+07:00",
+  "time": "2026-11-03T11:54:53.444198+07:00",
   "target": "Q3/2026",
   "method": "public search index hints; not comprehensive official disclosure API",
   "pages_found": 0,
   "pdf_links_found": 0,
-  "new_pdfs_queued": 0,
-  "seed_candidates": 1,
+  "new_pdfs_queued": 1,
+  "seed_candidates": 2,
   "manual_review": 0,
   "errors": [],
   "coverage": "PARTIAL; seeded URLs plus public search hints; source URLs may be inaccessible"

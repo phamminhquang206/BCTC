@@ -1,18 +1,34 @@
 {
-  "reports": {},
+  "reports": {
+    "CDC|HOSE|FY2026-Q3|consolidated|https://staticfile.hsx.vn/Uploads/UploadDocuments/2509029/20261028%20-%20CDC%20-%20BAO%20CAO%20TAI%20CHINH%20HOP%20NHAT%20Q3.2026%20SIGNED.pdf": {
+      "ticker": "CDC",
+      "exchange": "HOSE",
+      "period": "FY2026-Q3",
+      "scope": "consolidated",
+      "source_url": "https://staticfile.hsx.vn/Uploads/UploadDocuments/2509029/20261028%20-%20CDC%20-%20BAO%20CAO%20TAI%20CHINH%20HOP%20NHAT%20Q3.2026%20SIGNED.pdf",
+      "pdf_url": "https://staticfile.hsx.vn/Uploads/UploadDocuments/2509029/20261028%20-%20CDC%20-%20BAO%20CAO%20TAI%20CHINH%20HOP%20NHAT%20Q3.2026%20SIGNED.pdf",
+      "sha256": "916193516f4905f3c7607b77be7bb510a58dc2c2e77ffa03402835aa5a28cd9d",
+      "status": "needs_review",
+      "candidates": {},
+      "updated_at": "2026-11-03T11:55:26.410157+07:00"
+    }
+  },
   "verified_observations": [],
   "last_run": {
-    "run_at": "2026-11-03T11:52:28.548827+07:00",
-    "reports_configured": 1,
-    "checked": 0,
-    "needs_review": 0,
+    "run_at": "2026-11-03T11:55:26.410176+07:00",
+    "reports_configured": 2,
+    "checked": 1,
+    "successful_downloads": 1,
+    "blocked_tls": 1,
+    "needs_review": 1,
     "qualified": 0,
     "errors": [
       {
         "ticker": "VNR",
         "url": "https://owa.hnx.vn/ftp/cims/2026/10_W5/000000016982350_VI_BaoCaoTaiChinhHN_Q3_2026_signed.pdf",
         "error": "Official PDF HTTPS certificate validation failed. Source is temporarily blocked; do not disable TLS verification. Configure a trusted CA certificate bundle or use a validated alternate official URL.",
-        "status": "blocked"
+        "status": "blocked_tls",
+        "retry_next_run": true
       }
     ],
     "coverage": "partial; configured URLs only"
