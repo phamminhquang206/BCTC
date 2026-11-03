@@ -22,6 +22,8 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
       - run: pip install -r requirements.txt
+      - name: Pilot public structured financial tables
+        run: python -m src.table_source
       - name: Discover public quarterly report candidates
         run: python -m src.discover
       - name: Analyze discovered documents and create PDF
@@ -44,6 +46,7 @@ jobs:
             reports/*.pdf
             data/scan_log.json
             data/discovery_log.json
+            data/table_scan.json
             data/discovered_pages.json
           if-no-files-found: warn
           retention-days: 30
