@@ -3,7 +3,7 @@
 Keeps raw field IDs/units and periods for auditing; does not silently certify
 figures or overwrite manually verified observations.
 """
-import csv, json, re, time
+import csv, json, re, time, os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -20,7 +20,12 @@ def safe(v):
     except (ValueError,TypeError):return None
 
 def main():
+    import vnstock
     from vnstock import Fundamental
+    key=os.environ.get('VNSTOCK_API_KEY')
+    if not key:
+        raise SystemExit('Missing VNSTOCK_API_KEY: configure GitHub Actions repository secret')
+    vnstock.login(key)
     with (ROOT/"config/table_tickers.csv").open(encoding="utf-8-sig",newline="") as f:
         tickers=[r["ticker"].strip().upper() for r in csv.DictReader(f) if r.get("ticker","").strip()]
     results=[]
