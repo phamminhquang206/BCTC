@@ -1,0 +1,33 @@
+{
+  "run_at": "2026-11-03T12:38:07.981572+07:00",
+  "coverage": "PILOT only; public DStock HTML, not exchange disclosures",
+  "unit": "as displayed by DStock; check page before use",
+  "periods": [
+    "Q3/2025",
+    "Q2/2026",
+    "Q3/2026"
+  ],
+  "results": [
+    {
+      "ticker": "CDC",
+      "source_url": "https://dstock.vndirect.com.vn/bao-cao-ket-qua-kinh-doanh/CDC",
+      "source": "DStock public HTML",
+      "status": "html_table_missing_or_incomplete",
+      "table_candidates": 0
+    },
+    {
+      "ticker": "VNR",
+      "source_url": "https://dstock.vndirect.com.vn/bao-cao-ket-qua-kinh-doanh/VNR",
+      "source": "DStock public HTML",
+      "status": "html_table_missing_or_incomplete",
+      "table_candidates": 0
+    },
+    {
+      "ticker": "FPT",
+      "source_url": "https://dstock.vndirect.com.vn/bao-cao-ket-qua-kinh-doanh/FPT",
+      "source": "DStock public HTML",
+      "status": "html_table_missing_or_incomplete",
+      "table_candidates": 0
+    }
+  ]
+}
