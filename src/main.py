@@ -14,6 +14,7 @@ from pathlib import Path
 
 import fitz
 import requests
+import ssl
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -50,7 +51,10 @@ def get_text_from_pdf(url):
     parsed = requests.utils.urlparse(url)
     if parsed.scheme != 'https' or not parsed.hostname:
         raise ValueError('Only public HTTPS URLs supported')
-    r = requests.get(url, timeout=35, headers=HEADERS, allow_redirects=True, stream=True)
+    try:
+        r = requests.get(url, timeout=35, headers=HEADERS, allow_redirects=True, stream=True)
+    except requests.exceptions.SSLError as exc:
+        raise RuntimeError('Official PDF HTTPS certificate validation failed. Source is temporarily blocked; do not disable TLS verification. Configure a trusted CA certificate bundle or use a validated alternate official URL.') from exc
     r.raise_for_status()
     if requests.utils.urlparse(r.url).scheme != 'https':
         raise ValueError('Redirected to insecure URL')
@@ -165,7 +169,7 @@ def run():
             checked += 1
             state['reports'][key] = {'ticker':item.get('ticker'), 'exchange':item.get('exchange'), 'period':item.get('period'), 'scope':item.get('scope'), 'source_url':item.get('source_url') or url, 'pdf_url':url, 'sha256':sha, 'status':'needs_review', 'candidates':inspect(txt), 'updated_at':now().isoformat()}
         except Exception as exc:
-            errors.append({'ticker':item.get('ticker'), 'url':url, 'error':str(exc)[:250]})
+            errors.append({'ticker':item.get('ticker'), 'url':url, 'error':str(exc)[:400], 'status':'blocked' if 'certificate validation failed' in str(exc) else 'download_failed'})
     verified = [o for o in state.get('verified_observations',[]) if is_qualified(o)]
     log = {'run_at': now().isoformat(), 'reports_configured':len(entries), 'checked':checked, 'needs_review':sum(1 for x in state['reports'].values() if x.get('status')=='needs_review'), 'qualified':len(verified), 'errors':errors, 'coverage':'partial; configured URLs only'}
     state['last_run'] = log
