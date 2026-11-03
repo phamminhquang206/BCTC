@@ -38,3 +38,9 @@ A conservative cloud-ready foundation. **Not** a complete automatic HOSE/HNX/UPC
 - PDF snapshots and notification only on new verified opportunities.
 
 GitHub's scheduled start is best effort, and an inactive repository can have scheduled workflows disabled. Test quotas/permissions and keep repository private while state contains nonpublic metadata.
+
+## Troubleshooting official-host TLS (2026-11-03)
+- `owa.hnx.vn` returned `SSLCertVerificationError` in GitHub Actions. Certificate validation stays **on**; do not use `verify=False`.
+- An independent candidate HOSE PDF (CDC, Q3/2026) is seeded to test the second official host. Its availability has NOT yet been confirmed in Actions.
+- The downloader processes every configured report independently, so HNX failure cannot stop other sources. `scan_log.json` now shows `successful_downloads`, `blocked_tls`, and per-document retry information.
+- If HNX continues to fail, inspect its certificate chain or obtain a different official, HTTPS-valid filing URL. Seeded URLs are smoke tests, not a replacement for real source-feed discovery.
