@@ -39,7 +39,7 @@ def main():
                 item["raw_rows"]=[]
                 for _,row in relevant.iterrows():
                     field=str(row["id"])
-                    if any(x in field.upper() for x in ("REVENUE","PROFIT","INCOME")):
+                    if field.upper() in ("IS_NET_REVENUE","IS_NET_PROFIT_AFTER_TAX","IS_REVENUE"):
                         item["raw_rows"].append({"period":str(row["period"]),"id":field,"name":str(row.get("name","")),"unit":str(row.get("unit","")),"value":safe(row["value"])})
                 item["raw_rows"]=item["raw_rows"][:160]
                 item["status"]="data_received_review_mapping" if item["raw_rows"] else "no_matching_fields"
