@@ -28,7 +28,7 @@ def main():
         if not re.fullmatch(r"[A-Z]{3,5}",ticker):continue
         item={"ticker":ticker,"source":"vnstock Fundamental (underlying provider selected by library)","status":"not_processed"}
         try:
-            df=Fundamental().equity(ticker).income_statement(period="quarter",format="long")
+            df=Fundamental().equity(ticker).income_statement(period="quarter",format="long",source="vci")
             item["columns"]=[str(c) for c in df.columns]
             if not {"period","id","value"}.issubset(df.columns):
                 item["status"]="unexpected_schema"
