@@ -103,6 +103,17 @@ def main():
         f'site:owa.hnx.vn/ftp/cims/ "BCTC" "{year}"',
     ]
     errors, discovered, pages = [], {}, []
+    # Load explicit official-source seeds; availability is validated by the PDF downloader.
+    seed_path = ROOT / "config" / "official_seed_reports.csv"
+    seeds = []
+    if seed_path.exists():
+        with seed_path.open(encoding="utf-8-sig", newline="") as sf:
+            for row in csv.DictReader(sf):
+                u = (row.get("report_url") or "").strip()
+                if recognized(u) and PDF_RE.search(urlparse(u).path):
+                    seeds.append(row)
+                else:
+                    errors.append({"source": "official_seed_reports.csv", "error": "invalid official HTTPS PDF URL", "ticker": row.get("ticker")})
     for term in terms:
         for candidate in search_index(term, errors):
             url = candidate["url"]
@@ -136,6 +147,12 @@ def main():
             existing.append(row)
             added.append(row)
             known.add(url)
+    for row in seeds:
+        url = row["report_url"].strip()
+        if url not in known:
+            existing.append({k: row.get(k, "") for k in columns})
+            added.append(row)
+            known.add(url)
     with CONFIG.open("w", encoding="utf-8", newline="") as fh:
         wr = csv.DictWriter(fh, fieldnames=columns)
         wr.writeheader()
@@ -146,8 +163,8 @@ def main():
     log = {"time": datetime.now(TZ).isoformat(), "target": f"Q{q}/{year}",
            "method": "public search index hints; not comprehensive official disclosure API",
            "pages_found": len(pages), "pdf_links_found": len(discovered),
-           "new_pdfs_queued": len(added), "manual_review": len(manual),
-           "errors": errors, "coverage": "PARTIAL; not a full HOSE/HNX/UPCoM scan"}
+           "new_pdfs_queued": len(added), "seed_candidates": len(seeds), "manual_review": len(manual),
+           "errors": errors, "coverage": "PARTIAL; seeded URLs plus public search hints; source URLs may be inaccessible"}
     OUT.write_text(json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(log, ensure_ascii=False))
 
