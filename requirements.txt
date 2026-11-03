@@ -6,4 +6,5 @@ openpyxl>=3.1,<4
 
 truststore>=0.10,<1
 
-vnstock>=5,<6
+--extra-index-url https://vnstocks.com/api/packages
+vnstock==5.0.1
