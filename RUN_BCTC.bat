@@ -4,9 +4,22 @@ cd /d "%~dp0"
 chcp 65001 >nul
 if not exist ".venv\Scripts\python.exe" (
   echo [SETUP] Creating Python virtual environment...
-  py -3.12 -m venv .venv
+  py -3.12 --version >nul 2>&1
+  if not errorlevel 1 (
+    py -3.12 -m venv .venv
+  ) else (
+    py -3.13 --version >nul 2>&1
+    if not errorlevel 1 (
+      py -3.13 -m venv .venv
+    ) else (
+      echo Python 3.12 or 3.13 is required for this project.
+      echo Download Python 3.12 from https://www.python.org/downloads/
+      pause
+      exit /b 1
+    )
+  )
   if errorlevel 1 (
-    echo Python 3.12 not found. Install Python 3.12 and retry.
+    echo Could not create environment. Install Python 3.12 and retry.
     pause
     exit /b 1
   )
