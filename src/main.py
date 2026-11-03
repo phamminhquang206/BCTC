@@ -15,6 +15,8 @@ from pathlib import Path
 import fitz
 import requests
 import ssl
+import truststore
+truststore.inject_into_ssl()  # Use OS CA roots while retaining certificate verification.
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
