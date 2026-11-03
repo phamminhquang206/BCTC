@@ -159,21 +159,27 @@ def run():
         entries = []
     errors = []
     checked = 0
+    successful_downloads = 0
+    blocked = 0
     for item in entries:
         url = item.get('report_url','').strip()
         if not url: continue
         key = '|'.join(item.get(k,'') for k in ['ticker','exchange','period','scope','report_url'])
         try:
             txt, sha = get_text_from_pdf(url)
+            successful_downloads += 1
             old = state['reports'].get(key)
             if old and old.get('sha256') == sha and old.get('status') == 'needs_review':
                 continue
             checked += 1
             state['reports'][key] = {'ticker':item.get('ticker'), 'exchange':item.get('exchange'), 'period':item.get('period'), 'scope':item.get('scope'), 'source_url':item.get('source_url') or url, 'pdf_url':url, 'sha256':sha, 'status':'needs_review', 'candidates':inspect(txt), 'updated_at':now().isoformat()}
         except Exception as exc:
-            errors.append({'ticker':item.get('ticker'), 'url':url, 'error':str(exc)[:400], 'status':'blocked' if 'certificate validation failed' in str(exc) else 'download_failed'})
+            status = 'blocked_tls' if 'certificate validation failed' in str(exc) else 'download_failed'
+            if status == 'blocked_tls':
+                blocked += 1
+            errors.append({'ticker':item.get('ticker'), 'url':url, 'error':str(exc)[:400], 'status':status, 'retry_next_run':True})
     verified = [o for o in state.get('verified_observations',[]) if is_qualified(o)]
-    log = {'run_at': now().isoformat(), 'reports_configured':len(entries), 'checked':checked, 'needs_review':sum(1 for x in state['reports'].values() if x.get('status')=='needs_review'), 'qualified':len(verified), 'errors':errors, 'coverage':'partial; configured URLs only'}
+    log = {'run_at': now().isoformat(), 'reports_configured':len(entries), 'checked':checked, 'successful_downloads':successful_downloads, 'blocked_tls':blocked, 'needs_review':sum(1 for x in state['reports'].values() if x.get('status')=='needs_review'), 'qualified':len(verified), 'errors':errors, 'coverage':'partial; configured URLs only'}
     state['last_run'] = log
     write_json(state_path,state)
     write_json(DATA / 'scan_log.json',log)
