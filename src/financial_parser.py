@@ -22,7 +22,6 @@ LABELS = {
     ],
 }
 # Keep exact raw tokens. Do not interpret amounts or columns before reviewing headings.
-NUMBER = re.compile(r"(?<![A-Za-z])(?:\\(?-:[-+]?\\d[\\d., ]*\\)|[-+]?\\d[\\d.,]*)(?![A-Za-z])")
 # Simpler token pattern with decimal/group separators.
 AMOUNT = re.compile(r"(?<![A-Za-z0-9])(?:\\([-+]?\\d[\\d.,]*\\)|[-+]?\\d[\\d.,]*)(?![A-Za-z])")
 
