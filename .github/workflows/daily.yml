@@ -22,10 +22,21 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
       - run: pip install -r requirements.txt
+      - name: Check Vnstock API quota before scan
+        env:
+          VNSTOCK_API_KEY: ${{ secrets.VNSTOCK_API_KEY }}
+        run: |
+          vnstock usage || echo "Quota check unavailable; continuing scan"
       - name: Pilot quarterly financial data API
         env:
           VNSTOCK_API_KEY: ${{ secrets.VNSTOCK_API_KEY }}
         run: python -m src.api_source
+      - name: Check Vnstock API quota after scan
+        if: always()
+        env:
+          VNSTOCK_API_KEY: ${{ secrets.VNSTOCK_API_KEY }}
+        run: |
+          vnstock usage || echo "Quota check unavailable"
       - name: Pilot public structured financial tables
         run: python -m src.table_source
       - name: Discover public quarterly report candidates
