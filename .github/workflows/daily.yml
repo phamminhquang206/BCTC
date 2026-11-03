@@ -23,6 +23,8 @@ jobs:
           cache: 'pip'
       - run: pip install -r requirements.txt
       - name: Pilot quarterly financial data API
+        env:
+          VNSTOCK_API_KEY: ${{ secrets.VNSTOCK_API_KEY }}
         run: python -m src.api_source
       - name: Pilot public structured financial tables
         run: python -m src.table_source
