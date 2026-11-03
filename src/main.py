@@ -16,6 +16,7 @@ import fitz
 import requests
 import ssl
 import truststore
+from src.financial_parser import candidates_from_pdf
 truststore.inject_into_ssl()  # Use OS CA roots while retaining certificate verification.
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
@@ -172,7 +173,7 @@ def run():
             if old and old.get('sha256') == sha and old.get('status') == 'needs_review':
                 continue
             checked += 1
-            state['reports'][key] = {'ticker':item.get('ticker'), 'exchange':item.get('exchange'), 'period':item.get('period'), 'scope':item.get('scope'), 'source_url':item.get('source_url') or url, 'pdf_url':url, 'sha256':sha, 'status':'needs_review', 'candidates':inspect(txt), 'updated_at':now().isoformat()}
+            state['reports'][key] = {'ticker':item.get('ticker'), 'exchange':item.get('exchange'), 'period':item.get('period'), 'scope':item.get('scope'), 'source_url':item.get('source_url') or url, 'pdf_url':url, 'sha256':sha, 'status':'needs_review', 'candidates':txt, 'updated_at':now().isoformat()}
         except Exception as exc:
             status = 'blocked_tls' if 'certificate validation failed' in str(exc) else 'download_failed'
             if status == 'blocked_tls':
