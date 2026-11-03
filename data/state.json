@@ -2,12 +2,18 @@
   "reports": {},
   "verified_observations": [],
   "last_run": {
-    "run_at": "2026-11-03T11:45:46.478500+07:00",
-    "reports_configured": 0,
+    "run_at": "2026-11-03T11:50:05.395788+07:00",
+    "reports_configured": 1,
     "checked": 0,
     "needs_review": 0,
     "qualified": 0,
-    "errors": [],
+    "errors": [
+      {
+        "ticker": "VNR",
+        "url": "https://owa.hnx.vn/ftp/cims/2026/10_W5/000000016982350_VI_BaoCaoTaiChinhHN_Q3_2026_signed.pdf",
+        "error": "HTTPSConnectionPool(host='owa.hnx.vn', port=443): Max retries exceeded with url: /ftp/cims/2026/10_W5/000000016982350_VI_BaoCaoTaiChinhHN_Q3_2026_signed.pdf (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate"
+      }
+    ],
     "coverage": "partial; configured URLs only"
   }
 }

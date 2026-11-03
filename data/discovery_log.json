@@ -1,11 +1,12 @@
 {
-  "time": "2026-11-03T11:45:46.157330+07:00",
+  "time": "2026-11-03T11:50:03.950046+07:00",
   "target": "Q3/2026",
   "method": "public search index hints; not comprehensive official disclosure API",
   "pages_found": 0,
   "pdf_links_found": 0,
-  "new_pdfs_queued": 0,
+  "new_pdfs_queued": 1,
+  "seed_candidates": 1,
   "manual_review": 0,
   "errors": [],
-  "coverage": "PARTIAL; not a full HOSE/HNX/UPCoM scan"
+  "coverage": "PARTIAL; seeded URLs plus public search hints; source URLs may be inaccessible"
 }
