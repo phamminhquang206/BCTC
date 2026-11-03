@@ -70,7 +70,7 @@ def get_text_from_pdf(url):
     if not raw.startswith(b'%PDF'):
         raise ValueError('URL does not return a PDF')
     with fitz.open(stream=bytes(raw), filetype='pdf') as pdf:
-        return '\n'.join(page.get_text() for page in pdf[:min(len(pdf), 30)]), hashlib.sha256(raw).hexdigest()
+        return candidates_from_pdf(pdf), hashlib.sha256(raw).hexdigest()
 
 
 def parse_number(s):
@@ -170,10 +170,10 @@ def run():
             txt, sha = get_text_from_pdf(url)
             successful_downloads += 1
             old = state['reports'].get(key)
-            if old and old.get('sha256') == sha and old.get('status') == 'needs_review':
+            if old and old.get('sha256') == sha and old.get('status') == 'needs_review' and old.get('parser_version') == 2:
                 continue
             checked += 1
-            state['reports'][key] = {'ticker':item.get('ticker'), 'exchange':item.get('exchange'), 'period':item.get('period'), 'scope':item.get('scope'), 'source_url':item.get('source_url') or url, 'pdf_url':url, 'sha256':sha, 'status':'needs_review', 'candidates':txt, 'updated_at':now().isoformat()}
+            state['reports'][key] = {'ticker':item.get('ticker'), 'exchange':item.get('exchange'), 'period':item.get('period'), 'scope':item.get('scope'), 'source_url':item.get('source_url') or url, 'pdf_url':url, 'sha256':sha, 'status':'needs_review', 'candidates':txt, 'parser_version':2, 'updated_at':now().isoformat()}
         except Exception as exc:
             status = 'blocked_tls' if 'certificate validation failed' in str(exc) else 'download_failed'
             if status == 'blocked_tls':
