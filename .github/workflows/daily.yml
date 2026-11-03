@@ -1,0 +1,44 @@
+name: Daily Vietnamese Financial Growth Scan
+on:
+  workflow_dispatch:
+  schedule:
+    # 12:00 Vietnam (UTC+7) = 05:00 UTC; GitHub scheduled jobs can be delayed.
+    - cron: '0 5 * * *'
+permissions:
+  contents: write
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: financial-scan
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - run: python -m src.main
+      - name: Save state and report to repository
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/ reports/
+          if ! git diff --cached --quiet; then
+            git commit -m "Daily BCTC scan $(date -u +%F)"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push origin HEAD:"${GITHUB_REF_NAME}"
+          fi
+      - name: Upload PDF and audit output
+        uses: actions/upload-artifact@v4
+        with:
+          name: bctc-daily-${{ github.run_id }}
+          path: |
+            reports/*.pdf
+            data/scan_log.json
+          if-no-files-found: warn
+          retention-days: 30
