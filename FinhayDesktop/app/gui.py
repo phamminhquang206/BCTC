@@ -1,16 +1,16 @@
 import json
-import math
 import re
+from collections import OrderedDict
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 from PySide6.QtCore import QAbstractTableModel, QDate, QModelIndex, QSortFilterProxyModel, Qt
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QCompleter, QDateEdit, QFileDialog,
     QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
     QMessageBox, QProgressBar, QPushButton, QSpinBox, QSplitter, QTabWidget,
-    QTableView, QTextEdit, QVBoxLayout, QWidget, QTabBar,
+    QTableView, QTextEdit, QVBoxLayout, QWidget, QTabBar, QDockWidget, QToolButton,
 )
 
 from .auth import REDIRECT, Vault
@@ -18,6 +18,11 @@ from .engine import Worker
 from .exporting import export_rows
 from .storage import Store
 from .financial_view import FinancialView
+from .overview_view import OverviewView, overview_from_rows
+from .ui_controls import StepSpinBox, set_light_palette
+from .activity_log import ActivityLog
+from .finance import build_result, previous_period, sector_info
+from .price_view import PriceView
 
 LABELS = {
     'symbol': 'Mã', 'name': 'Doanh nghiệp', 'exchange': 'Sàn', 'year': 'Năm', 'quarter': 'Quý',
@@ -40,6 +45,11 @@ LABELS = {
     'tongthunhaphoatdong': 'Tổng thu nhập hoạt động', 'thunhaplaithuan': 'Thu nhập lãi thuần',
     'loinhuansauthue': 'LNST', 'codongcuacongtyme': 'LNST công ty mẹ',
     'doanhthuhoatdong': 'Doanh thu hoạt động', 'lnsauthue': 'LNST', 'lnsauthuecuachusohuu': 'LNST chủ sở hữu',
+    'sector_group': 'Nhóm ngành', 'sector_name': 'Ngành', 'sector_slug': 'Mã ngành',
+    'sector_level': 'Cấp ngành', 'period_label': 'Kỳ',
+    'revenue_previous': 'Doanh thu quý trước', 'revenue_year_ago': 'Doanh thu cùng kỳ năm trước',
+    'profit_previous': 'LNST quý trước', 'profit_year_ago': 'LNST cùng kỳ năm trước',
+    'parent_profit_previous': 'LNST mẹ quý trước', 'parent_profit_year_ago': 'LNST mẹ cùng kỳ năm trước',
 }
 for metric, label in [('revenue', 'DT'), ('profit', 'LNST'), ('parent_profit', 'LNST mẹ')]:
     for basis, blabel in [('yoy', 'cùng kỳ'), ('qoq', 'quý trước')]:
@@ -53,13 +63,16 @@ class TableModel(QAbstractTableModel):
     def __init__(self):
         super().__init__()
         self.rows, self.keys, self.money = [], [], set()
+        self.column_order, self.column_labels = [], {}
+        self.datetime_values = False
 
     def set_rows(self, rows, money=None):
         self.beginResetModel()
         self.rows = rows
         priority = ['symbol', 'name', 'exchange', 'year', 'quarter', 'status', 'revenue_label', 'revenue', 'profit', 'parent_profit']
         keys = list(dict.fromkeys(k for row in rows for k in row))
-        self.keys = [k for k in priority if k in keys] + [k for k in keys if k not in priority]
+        priority = self.column_order or priority
+        self.keys = (list(priority) if self.column_order else [k for k in priority if k in keys]) + [k for k in keys if k not in priority]
         self.money = set(money or [])
         self.endResetModel()
 
@@ -73,7 +86,7 @@ class TableModel(QAbstractTableModel):
         if role == Qt.DisplayRole:
             if orientation == Qt.Horizontal:
                 key = self.keys[section]
-                return LABELS.get(key, key) + (' (tỷ VND)' if key in self.money else '')
+                return self.column_labels.get(key, LABELS.get(key, key)) + (' (tỷ VND)' if key in self.money else '')
             return section + 1
 
     def data(self, index, role=Qt.DisplayRole):
@@ -93,6 +106,8 @@ class TableModel(QAbstractTableModel):
             if isinstance(value, (dict, list)):
                 return json.dumps(value, ensure_ascii=False)
             if isinstance(value, (int, float)):
+                if key == 't' and self.datetime_values:
+                    return datetime.fromtimestamp(value, timezone(timedelta(hours=7))).strftime('%d/%m/%Y')
                 if key in ('year', 'quarter'):
                     return str(value)
                 if key in self.money:
@@ -102,11 +117,21 @@ class TableModel(QAbstractTableModel):
                 return f'{value:,}'
             return str(value)
         if role == Qt.ToolTipRole:
+            if key == 'status':
+                return STATUS.get(value, str(value)) + (': ' + self.rows[index.row()]['message'] if self.rows[index.row()].get('message') else '')
+            if key.endswith('_percent') and value is None:
+                state = self.rows[index.row()].get(key.removesuffix('_percent') + '_state', '')
+                if state:
+                    return f'{LABELS.get(key, key)}: {state}. Không quy đổi dữ liệu thiếu hoặc kỳ gốc không dương thành 0%.'
             return f'{key}: {value}'
         if role == Qt.TextAlignmentRole and isinstance(value, (int, float)):
             return int(Qt.AlignRight | Qt.AlignVCenter)
         if role == Qt.ForegroundRole and key == 'status':
             return QColor({'ok': '#15803d', 'missing': '#a16207', 'error': '#dc2626'}.get(value, '#475569'))
+        if role == Qt.ForegroundRole and key.endswith('_percent') and isinstance(value, (int, float)):
+            return QColor('#b91c1c' if value < 0 else ('#166534' if value > 0 else '#475569'))
+        if role == Qt.ForegroundRole and key in self.money and isinstance(value, (int, float)) and value < 0:
+            return QColor('#b91c1c')
 
 
 class FilterProxy(QSortFilterProxyModel):
@@ -152,17 +177,78 @@ class DataTable(QWidget):
                 self.status.addItem(value, key)
         self.status.currentIndexChanged.connect(self.filter_changed)
         self.status.setVisible(scan)
+        self.is_scan = scan
+        self.price_mode = False
+        self.export_metadata = {}
+        self.core_columns = []
+        self.details = QCheckBox('Cột chi tiết')
+        self.details.setVisible(scan)
+        self.details.toggled.connect(self.apply_scan_columns)
         export = QPushButton('Xuất bảng đang lọc')
         export.clicked.connect(lambda: self.export(True))
         export_all = QPushButton('Xuất toàn bộ')
         export_all.clicked.connect(lambda: self.export(False))
         bar = QHBoxLayout()
-        for w in (self.query, self.status, export, export_all):
+        for w in (self.query, self.status, self.details, export, export_all):
             bar.addWidget(w)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addLayout(bar)
         layout.addWidget(self.view)
+
+    def set_scan_rows(self, rows, config):
+        annual = config['period'] == 'annual'
+        self.core_columns = ['symbol', 'name', 'sector_group', 'status', 'period_label']
+        for metric in ('revenue', 'profit'):
+            self.core_columns += [metric]
+            if not annual:
+                self.core_columns += [metric + '_previous']
+            self.core_columns += [metric + '_year_ago']
+            if not annual:
+                self.core_columns += [metric + '_qoq_percent']
+            self.core_columns += [metric + '_yoy_percent']
+        self.core_columns += ['message']
+        self.model.column_order = self.core_columns
+        year, quarter = config['year'], config['quarter']
+        def period(y, q):
+            return f'Q{q}/{y}' if q else str(y)
+        py, pq = previous_period(year, quarter) if quarter else (year - 1, None)
+        self.model.column_labels = {}
+        for metric, label in (('revenue', 'Doanh thu'), ('profit', 'LNST')):
+            self.model.column_labels.update({metric: f'{label}\n{period(year, quarter)}',
+                metric + '_previous': f'{label}\n{period(py, pq)}',
+                metric + '_year_ago': f'{label}\n{period(year - 1, quarter)}',
+                metric + '_qoq_percent': f'{label} %\nso quý trước',
+                metric + '_yoy_percent': f'{label} %\nso cùng kỳ'})
+        money = {key for key in self.core_columns if key.startswith(('revenue', 'profit')) and not key.endswith('_percent')}
+        money |= {'parent_profit', 'parent_profit_previous', 'parent_profit_year_ago'}
+        money |= {key for row in rows for key in row if key.endswith('_delta')}
+        self.model.set_rows(rows, money)
+        self.query.setPlaceholderText('Lọc theo mã, doanh nghiệp, nhóm ngành hoặc ghi chú…')
+        widths = {'symbol': 65, 'name': 190, 'sector_group': 170, 'status': 150, 'period_label': 90, 'message': 280}
+        for key in self.core_columns:
+            self.view.setColumnWidth(self.model.keys.index(key), widths.get(key, 140))
+        self.apply_scan_columns()
+
+    def apply_scan_columns(self, *_):
+        if self.is_scan and self.core_columns:
+            for col, key in enumerate(self.model.keys):
+                self.view.setColumnHidden(col, not self.details.isChecked() and key not in self.core_columns)
+
+    def update_scan_row(self, row):
+        index = next((i for i, existing in enumerate(self.model.rows) if existing.get('symbol') == row['symbol']), None)
+        if index is None:
+            return
+        new_keys = [key for key in row if key not in self.model.keys]
+        if new_keys:
+            start = len(self.model.keys)
+            self.model.beginInsertColumns(QModelIndex(), start, start + len(new_keys) - 1)
+            self.model.keys.extend(new_keys)
+            self.model.money.update(key for key in new_keys if key.endswith('_delta'))
+            self.model.endInsertColumns()
+        self.model.rows[index] = {**self.model.rows[index], **row}
+        self.model.dataChanged.emit(self.model.index(index, 0), self.model.index(index, len(self.model.keys) - 1))
+        self.apply_scan_columns()
 
     def filter_changed(self):
         self.proxy.beginFilterChange()
@@ -183,44 +269,27 @@ class DataTable(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, 'Lưu dữ liệu — giá trị tiền ở đơn vị gốc VND', 'finhay.xlsx', 'Excel (*.xlsx);;CSV UTF-8 (*.csv)')
         if path:
             try:
-                export_rows(path, rows, {'thoi_diem_xuat': datetime.now().astimezone().isoformat(), 'bang': 'đang lọc' if filtered else 'toàn bộ'})
+                export_rows(path, self.export_data(rows), {'thoi_diem_xuat': datetime.now().astimezone().isoformat(), 'bang': 'đang lọc' if filtered else 'toàn bộ', **self.export_metadata})
                 QMessageBox.information(self, 'Đã xuất', 'Đã lưu file. Các giá trị tiền giữ đơn vị gốc; xem currency/unit nếu nguồn cung cấp.')
             except Exception as exc:
                 QMessageBox.warning(self, 'Không lưu được', f'Kiểm tra quyền ghi và đóng file Excel đang mở. ({type(exc).__name__})')
 
+    def export_data(self, rows):
+        if self.price_mode:
+            names = {key: self.model.column_labels.get(key, LABELS.get(key, key)) for key in ('t', 'o', 'h', 'l', 'c', 'v')}
+            return [{names[key]: datetime.fromtimestamp(row['t'], timezone(timedelta(hours=7))).strftime('%d/%m/%Y') if key == 't' else row.get(key) for key in names} for row in rows]
+        if not self.is_scan or not self.core_columns:
+            return rows
+        keys = [key for col, key in enumerate(self.model.keys) if not self.view.isColumnHidden(col)]
+        def title(key):
+            text = self.model.column_labels.get(key, LABELS.get(key, key)).replace('\n', ' ')
+            return text + (' (VND)' if key in self.model.money else '')
+        return [{title(key): STATUS.get(row.get(key), row.get(key)) if key == 'status' else row.get(key) for key in keys} for row in rows]
 
-class PriceChart(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.points = []
-        self.setMinimumHeight(190)
-
-    def set_rows(self, rows):
-        self.points = sorted([(r['t'], r['c']) for r in rows if isinstance(r.get('t'), (int, float)) and isinstance(r.get('c'), (int, float)) and math.isfinite(r['c'])])
-        self.update()
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.fillRect(self.rect(), QColor('#f0f9ff'))
-        p.setPen(QColor('#475569'))
-        if len(self.points) < 2:
-            p.drawText(self.rect(), Qt.AlignCenter, 'Biểu đồ giá đóng cửa • chưa có đủ dữ liệu')
-            return
-        left, top, width, height = 85, 26, self.width() - 110, self.height() - 60
-        low, high = min(v for _, v in self.points), max(v for _, v in self.points)
-        p.drawText(8, top + 8, f'{high:,.0f}')
-        p.drawText(8, top + height, f'{low:,.0f}')
-        p.drawText(left, self.height() - 10, datetime.fromtimestamp(self.points[0][0], timezone(timedelta(hours=7))).strftime('%d/%m/%Y'))
-        p.drawText(max(left, self.width() - 110), self.height() - 10, datetime.fromtimestamp(self.points[-1][0], timezone(timedelta(hours=7))).strftime('%d/%m/%Y'))
-        p.setPen(QPen(QColor('#0284c7'), 2))
-        coords = [(left + i * width / (len(self.points) - 1), top + height - (v - low) / (high - low or 1) * height) for i, (_, v) in enumerate(self.points)]
-        for a, b in zip(coords, coords[1:]):
-            p.drawLine(int(a[0]), int(a[1]), int(b[0]), int(b[1]))
 
 
 def spin(low, high, value):
-    widget = QSpinBox()
+    widget = StepSpinBox()
     widget.setRange(low, high)
     widget.setValue(value)
     return widget
@@ -234,6 +303,12 @@ class MainWindow(QMainWindow):
         self.store = Store(Path(data_dir) / 'finhay.sqlite3')
         self.worker = None
         self.current_run = None
+        self.financial_cache = OrderedDict()
+        self.financial_states = {}
+        self._financial_key = None
+        self._task_summary = None
+        self._scan_statuses = {}
+        self._scan_config = {}
         root = QWidget()
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
@@ -258,12 +333,22 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.tabs)
         self.make_lookup()
         self.make_scan()
-        self.log = QTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setMaximumHeight(90)
-        self.log.setPlaceholderText('Trạng thái xử lý sẽ xuất hiện tại đây…')
-        layout.addWidget(self.log)
-        self.statusBar().showMessage(f'Dữ liệu: {data_dir} | Callback: {REDIRECT}')
+        self.log = ActivityLog()
+        self.log_dock = QDockWidget('Nhật ký hoạt động', self)
+        self.log_dock.setAllowedAreas(Qt.BottomDockWidgetArea)
+        self.log_dock.setFeatures(QDockWidget.DockWidgetClosable)
+        self.log_dock.setWidget(self.log)
+        self.log_dock.setMaximumHeight(170)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.log_dock)
+        self.log_dock.hide()
+        self.log_toggle = QToolButton()
+        self.log_toggle.setDefaultAction(self.log_dock.toggleViewAction())
+        self.log_toggle.setText('Nhật ký')
+        self.log_toggle.setToolTip('Hiện / ẩn nhật ký xử lý chi tiết')
+        self.statusBar().addPermanentWidget(self.log_toggle)
+        self.statusBar().setToolTip(f'Dữ liệu: {data_dir} | Callback: {REDIRECT}')
+        self.statusBar().showMessage('Sẵn sàng')
+        self.log.message_added.connect(self.statusBar().showMessage)
         self.reload_runs()
 
     def make_lookup(self):
@@ -284,6 +369,7 @@ class MainWindow(QMainWindow):
         self.sections = QTabWidget()
         self.lookup_tables = {}
         self.lookup_buttons = []
+        self.fetch_buttons = {}
         for key, title in [('overview', 'Tổng quan'), ('financial', 'Báo cáo tài chính'), ('price', 'Giá cổ phiếu'), ('events', 'Cổ tức và quyền')]:
             page = QWidget()
             box = QVBoxLayout(page)
@@ -313,29 +399,82 @@ class MainWindow(QMainWindow):
                 for w in (self.from_date, self.to_date):
                     w.setCalendarPopup(True)
                     w.setDisplayFormat('dd/MM/yyyy')
-                for w in (QLabel('Từ'), self.from_date, QLabel('Đến'), self.to_date):
-                    options.addWidget(w)
             button = QPushButton('Lấy dữ liệu')
+            button.setProperty('primary', True)
+            button.setMinimumHeight(38)
+            button.setCursor(Qt.PointingHandCursor)
+            self.fetch_buttons[key] = button
+            if key == 'financial':
+                button.setToolTip('Tải cả 3 báo cáo tài chính, mỗi loại theo quý và theo năm, trong khoảng năm đã chọn.')
             button.clicked.connect(lambda checked=False, section=key: self.lookup(section))
             self.lookup_buttons.append(button)
-            options.addWidget(button)
-            options.addStretch()
-            box.addLayout(options)
-            if key == 'price':
-                self.quote_label = QLabel('Giá hiện tại và biểu đồ lịch sử đóng cửa (VND)')
-                self.quote_label.setWordWrap(True)
-                box.addWidget(self.quote_label)
-                self.chart = PriceChart()
-                box.addWidget(self.chart)
-            table = FinancialView() if key == 'financial' else DataTable()
+            if key != 'price':
+                options.addWidget(button)
             if key == 'financial':
-                self.report.currentIndexChanged.connect(lambda: self.lookup_tables['financial'].set_records([]))
-                self.period.currentIndexChanged.connect(lambda: self.lookup_tables['financial'].set_records([]))
+                hint = QLabel('Tải cả 3 báo cáo · Quý và năm')
+                hint.setStyleSheet('color:#475569; font-size:12px;')
+                options.addWidget(hint)
+            options.addStretch()
+            if key != 'price':
+                box.addLayout(options)
+            if key == 'price':
+                self.price_panel = PriceView(DataTable)
+                self.price_panel.set_query_controls(self.from_date, self.to_date, button)
+                self.quote_label = self.price_panel.quote
+                self.chart = self.price_panel.chart
+                table = self.price_panel.table
+                box.addWidget(self.price_panel, 1)
+            else:
+                table = FinancialView() if key == 'financial' else (OverviewView() if key == 'overview' else DataTable())
+                box.addWidget(table)
             self.lookup_tables[key] = table
-            box.addWidget(table)
             self.sections.addTab(page, title)
         layout.addWidget(self.sections)
         self.tabs.addTab(tab, 'Tra cứu cổ phiếu')
+        for signal in (self.report.currentIndexChanged, self.period.currentIndexChanged,
+                       self.from_year.valueChanged, self.to_year.valueChanged, self.symbol.textChanged):
+            signal.connect(self.financial_selection_changed)
+        self.financial_selection_changed()
+
+    def financial_context(self):
+        return {'symbol': self.symbol.text().split('—')[0].strip().upper(),
+                'report': self.report.currentData(), 'period': self.period.currentData(),
+                'from_year': self.from_year.value(), 'to_year': self.to_year.value(), 'source': 'Finhay MCP'}
+
+    @staticmethod
+    def financial_key(context):
+        return tuple(context.get(key) for key in ('symbol', 'report', 'period', 'from_year', 'to_year'))
+
+    def financial_selection_changed(self, *_):
+        table = self.lookup_tables['financial']
+        if self._financial_key in self.financial_cache:
+            self.financial_states[self._financial_key] = table.snapshot()
+        context = self.financial_context()
+        key = self.financial_key(context)
+        self._financial_key = key
+        cached = self.financial_cache.get(key)
+        if cached is not None:
+            self.financial_cache.move_to_end(key)
+            table.set_records(cached['rows'], cached['context'])
+            table.restore_state(self.financial_states.get(key))
+        else:
+            table.set_records([], context)
+            table.restore_state()
+
+    def receive_financial(self, rows, result):
+        config = result.get('config', {})
+        context = {**self.financial_context(), **{k: config[k] for k in ('report', 'period', 'from_year', 'to_year') if k in config},
+                   'symbol': result['symbol'], 'loaded': True}
+        key = self.financial_key(context)
+        self.financial_cache[key] = {'rows': rows, 'context': context}
+        self.financial_cache.move_to_end(key)
+        # Raw data already persists in SQLite. Keep only the 12 most recently
+        # viewed query contexts in memory, including view state for each one.
+        while len(self.financial_cache) > 12:
+            old_key, _ = self.financial_cache.popitem(last=False)
+            self.financial_states.pop(old_key, None)
+        if key == self.financial_key(self.financial_context()):
+            self.financial_selection_changed()
 
     def make_scan(self):
         tab = QWidget()
@@ -366,11 +505,12 @@ class MainWindow(QMainWindow):
         grid.addWidget(self.basis, 2, 0, 1, 4)
         grid.addWidget(self.refresh_scan, 2, 4, 1, 2)
         layout.addLayout(grid)
-        note = QLabel('Quý: so cùng kỳ và quý trước. Năm: so năm trước. Chưa xác minh cơ sở quý → chỉ hiển thị số nguồn, không tính tăng trưởng. Xuất file giữ VND gốc.')
+        note = QLabel('Quý: so cùng kỳ và quý trước. Năm: so năm trước. Chưa xác minh cơ sở quý → chưa tính tăng trưởng. Kỳ gốc ≤ 0: % để trống. Xuất file giữ VND gốc.')
         note.setWordWrap(True)
         layout.addWidget(note)
         bar = QHBoxLayout()
         self.start_scan = QPushButton('Chạy lượt quét mới')
+        self.start_scan.setProperty('primary', True)
         self.start_scan.clicked.connect(self.new_scan)
         self.pause_btn = QPushButton('Tạm dừng / Hủy chờ')
         self.pause_btn.clicked.connect(self.pause)
@@ -397,18 +537,30 @@ class MainWindow(QMainWindow):
         for w in (self.connect_btn, self.disconnect_btn, self.start_scan, self.resume_btn, self.retry_btn, self.runs_box, *self.lookup_buttons):
             w.setEnabled(not value)
         self.pause_btn.setEnabled(value)
+        self.symbol.setEnabled(not value)
 
     def launch(self, action, config=None):
         if self.worker is not None:
             self.log.append('Đang có tác vụ chạy. Chờ hoàn tất hoặc bấm tạm dừng.')
             return
         self.busy(True)
+        self._task_summary = None
+        if action == 'lookup' and config:
+            self.fetch_buttons[config['section']].setText('Đang tải…')
+            if config['section'] == 'financial':
+                # Report and period are view selectors during a six-way fetch.
+                # Symbol and year range remain locked to the submitted query.
+                self.report_tabs.setEnabled(True)
+                self.period.setEnabled(True)
         self.worker = Worker(self.store, action, config)
         self.worker.message.connect(self.log.append)
         self.worker.failed.connect(self.on_error)
         self.worker.result.connect(lambda result: self.on_result(action, result))
-        self.worker.row_ready.connect(lambda row: self.load_run())
-        self.worker.progress.connect(self.update_progress)
+        self.worker.row_ready.connect(self.scan_row_ready)
+        if action == 'lookup' and config and config['section'] == 'financial':
+            self.worker.progress.connect(self.financial_progress)
+        else:
+            self.worker.progress.connect(self.update_progress)
         self.worker.finished.connect(self.worker_finished)
         self.log.append('Bắt đầu: ' + {'connect': 'kết nối Finhay', 'lookup': 'tra cứu', 'catalog': 'tải danh sách mã', 'scan': 'quét kết quả kinh doanh'}[action])
         self.worker.start()
@@ -417,14 +569,22 @@ class MainWindow(QMainWindow):
         worker = self.worker
         self.worker = None
         self.busy(False)
+        for button in self.fetch_buttons.values():
+            button.setText('Lấy dữ liệu')
         if worker:
             worker.deleteLater()
-        self.log.append('Tác vụ đã dừng/kết thúc. Dữ liệu nhận được đã lưu trên máy.')
+        if not self._task_summary:
+            self.log.append('Tác vụ đã dừng/kết thúc. Dữ liệu nhận được đã lưu trên máy.')
+
+    def financial_progress(self, done, total):
+        self.fetch_buttons['financial'].setText(f'Đang tải {done}/{total}')
 
     def on_error(self, message):
-        self.connection.setText('Cần kiểm tra kết nối nếu lỗi xác thực')
+        self._task_summary = message
+        if any(word in message.lower() for word in ('đăng nhập', 'xác thực')):
+            self.connection.setText('Cần kết nối lại Finhay')
         self.log.append(message)
-        QMessageBox.warning(self, 'Không hoàn tất tác vụ', message + '\n\nNếu lỗi đăng ký OAuth: Finhay cần cho phép public desktop client, scope read:market, redirect ' + REDIRECT + '. Không dán token/mật khẩu vào app.')
+        QMessageBox.warning(self, 'Tác vụ đã tạm dừng', message)
 
     def on_result(self, action, result):
         if action == 'connect':
@@ -438,27 +598,38 @@ class MainWindow(QMainWindow):
             self.symbol.setCompleter(completer)
             self.log.append(f'Đã nạp {len(names)} mã để tìm kiếm.')
         elif action == 'lookup':
+            if result.get('kind') == 'financial_summary':
+                if result['cancelled']:
+                    summary = f'{result["symbol"]}: đã dừng; giữ lại {result["completed"]}/{result["total"]} bộ báo cáo đã tải.'
+                else:
+                    summary = f'{result["symbol"]}: đã tải {result["completed"]}/{result["total"]} bộ báo cáo tài chính (quý và năm).'
+                if result['failed']:
+                    summary += f' {len(result["failed"])} bộ lỗi; xem Nhật ký và bấm Lấy dữ liệu để thử lại.'
+                self._task_summary = summary
+                self.log.append(summary)
+                return
             section, rows = result['section'], result['rows']
             # Exported rows carry provenance and original units.
             rows = [dict(r, _symbol=result['symbol'], _fetched_at=r.get('_fetched_at') or result['stamp'], _source='Finhay MCP') for r in rows]
             if section == 'financial':
-                config = result.get('config', {})
-                self.lookup_tables[section].set_records(rows, {'symbol': result['symbol'],
-                    'report': config.get('report', self.report.currentData()), 'period': config.get('period', self.period.currentData()),
-                    'from_year': config.get('from_year'), 'to_year': config.get('to_year'), 'source': 'Finhay MCP'})
+                self.receive_financial(rows, result)
+            elif section == 'overview':
+                self.lookup_tables[section].set_overview(result.get('overview') or overview_from_rows(rows), result['symbol'], result['stamp'])
+            elif section == 'price':
+                self.price_panel.set_result(rows, result.get('quote') or {}, result['symbol'], result['stamp'])
             else:
                 self.lookup_tables[section].model.set_rows(rows)
                 self.lookup_tables[section].view.resizeColumnsToContents()
-            if section == 'price':
-                quote = result.get('quote', {})
-                self.quote_label.setText(f'{result["symbol"]} • Giá: {quote.get("price", "—")} VND • Thay đổi: {quote.get("change_percent", "—")}% • Nguồn cập nhật: {quote.get("updated_at", "không rõ")}')
-                self.chart.set_rows(rows)
-            self.log.append(f'{result["symbol"]}: {len(rows)} dòng. {result["stamp"]}')
+            section_name = {'overview': 'tổng quan', 'financial': 'báo cáo tài chính', 'price': 'giá cổ phiếu', 'events': 'cổ tức và quyền'}[section]
+            self.log.append(f'{result["symbol"]}: đã tải {section_name}.\n{result["stamp"]}')
         elif action == 'scan':
             self.current_run = result['run_id']
             self.reload_runs(self.current_run)
             if result.get('finished'):
-                self.log.append('Lượt quét đã tạm dừng.' if result.get('paused') else 'Đã xử lý hết các mã đang chờ.')
+                self._task_summary = ('Lượt quét đã tạm dừng.' if result.get('paused') else 'Đã xử lý hết các mã đang chờ.')
+                if result.get('reason'):
+                    self._task_summary += ' ' + result['reason']
+                self.log.append(self._task_summary)
 
     def lookup(self, section):
         symbol = self.symbol.text().split('—')[0].strip().upper()
@@ -504,19 +675,48 @@ class MainWindow(QMainWindow):
         if not self.current_run:
             return
         jobs = self.store.jobs(self.current_run)
-        rows = [json.loads(j['result']) if j['result'] else {'symbol': j['symbol'], 'status': j['status']} for j in jobs]
-        money = {'revenue', 'profit', 'parent_profit'} | {k for row in rows for k in row if k.endswith('_delta')}
-        self.scan_table.model.set_rows(rows, money)
-        widths = {'symbol': 65, 'name': 215, 'exchange': 65, 'year': 55, 'quarter': 45,
-                  'status': 165, 'revenue_label': 180, 'revenue': 135, 'profit': 130, 'parent_profit': 155}
-        for key, width in widths.items():
-            if key in self.scan_table.model.keys:
-                self.scan_table.view.setColumnWidth(self.scan_table.model.keys.index(key), width)
-        counts = {key: sum(j['status'] == key for j in jobs) for key in STATUS}
         config = self.store.config(self.current_run)
+        config.setdefault('period', 'quarterly' if config.get('quarter') else 'annual')
+        rows = []
+        for job in jobs:
+            data = json.loads(job['result']) if job['result'] else {}
+            meta = config.get('universe', {}).get(job['symbol'], {})
+            data.update(symbol=job['symbol'], name=data.get('name') or meta.get('name', ''), exchange=data.get('exchange') or meta.get('exchange', ''))
+            if job['result'] and data.get('schema_version', 0) < 2:
+                cached_rows = []
+                for year in (config['year'], config['year'] - 1):
+                    cached = self.store.cached('get_financial_statement', dict(symbol=job['symbol'], type='income-statement', period=config['period'], year=year, limit=5, page=1))
+                    if cached:
+                        cached_rows.extend(cached[0].get('items', []))
+                if cached_rows:
+                    enriched = build_result(job['symbol'], data['name'], data['exchange'], cached_rows, config['year'], config['quarter'], config['basis'])
+                    old_message = data.get('message', '')
+                    data.update(enriched)
+                    if job['status'] == 'error':
+                        data['message'] = old_message
+                profile = self.store.cached('get_stock_profile', {'symbol': job['symbol']})
+                if profile:
+                    data.update(sector_info(profile[0]))
+            data['status'] = job['status']
+            data.setdefault('period_label', f'Q{config["quarter"]}/{config["year"]}' if config['quarter'] else str(config['year']))
+            rows.append(data)
+        self.scan_table.set_scan_rows(rows, config)
+        self._scan_statuses = {job['symbol']: job['status'] for job in jobs}
+        self._scan_config = config
+        self.update_scan_counts()
+        counts = {key: sum(j['status'] == key for j in jobs) for key in STATUS}
+        self.update_progress(len(jobs) - counts['pending'], len(jobs))
+
+    def scan_row_ready(self, row):
+        self.scan_table.update_scan_row(row)
+        self._scan_statuses[row['symbol']] = row['status']
+        self.update_scan_counts()
+
+    def update_scan_counts(self):
+        config = self._scan_config
+        counts = {key: sum(status == key for status in self._scan_statuses.values()) for key in STATUS}
         basis_label = {'unknown': 'chưa xác minh', 'standalone': 'quý riêng', 'cumulative': 'lũy kế'}.get(config['basis'], config['basis'])
         self.counts.setText(' | '.join(f'{STATUS[key]}: {val}' for key, val in counts.items()) + f' • Cơ sở quý: {basis_label}')
-        self.update_progress(len(jobs) - counts['pending'], len(jobs))
 
     def update_progress(self, done, total):
         self.progress.setRange(0, max(1, total))
@@ -557,18 +757,34 @@ class MainWindow(QMainWindow):
 
 
 STYLE = '''
-QWidget { font-family: "Segoe UI"; font-size: 10pt; color: #1e293b; }
-QMainWindow, QTabWidget::pane { background: #f8fafc; }
+QWidget { font-family: "Segoe UI"; font-size: 10pt; color: #172b4d; }
+QMainWindow, QTabWidget::pane { background: #f5f7fb; }
 QTabWidget::pane { border: 1px solid #dbe4ed; border-radius: 6px; }
-QTabBar::tab { padding: 10px 20px; background: #e2e8f0; }
-QTabBar::tab:selected { background: #ffffff; color: #0369a1; }
-QPushButton { background: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px; padding: 7px 12px; }
-QPushButton:hover { background: #e0f2fe; border-color: #0284c7; }
-QPushButton:disabled { color: #94a3b8; background: #f1f5f9; }
-QLineEdit, QComboBox, QSpinBox, QDateEdit { background: white; padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px; }
-QTableView { background: white; alternate-background-color: #f1f5f9; gridline-color: #e2e8f0; border: 1px solid #e2e8f0; }
-QHeaderView::section { background: #e0f2fe; color: #0c4a6e; padding: 7px; border: 1px solid #dbeafe; font-weight: 600; }
+QTabBar::tab { padding: 9px 18px; background: #e2e8f0; color:#334155; border-bottom:3px solid transparent; }
+QTabBar::tab:selected { background:#ffffff; color:#1d4ed8; border-bottom:3px solid #2563eb; font-weight:600; }
+QPushButton { color:#172b4d; background:#ffffff; border:1px solid #aebed1; border-radius:5px; padding:7px 12px; }
+QPushButton:hover { background:#eff6ff; border-color:#2563eb; }
+QPushButton:pressed { background:#dbeafe; }
+QPushButton[primary="true"] { background:#2563eb; color:#ffffff; border:1px solid #1d4ed8; font-weight:700; padding:8px 18px; }
+QPushButton[primary="true"]:hover { background:#1d4ed8; }
+QPushButton[primary="true"]:pressed { background:#1e40af; }
+QPushButton:disabled, QPushButton[primary="true"]:disabled { color:#64748b; background:#e2e8f0; border-color:#cbd5e1; }
+QLineEdit, QComboBox, QSpinBox, QDateEdit { color:#172b4d; background:white; padding:7px; border:1px solid #aebed1; border-radius:4px; selection-background-color:#dbeafe; selection-color:#0f172a; }
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDateEdit:focus { border:1px solid #2563eb; }
+QLineEdit:disabled, QSpinBox:disabled, QComboBox:disabled { color:#64748b; background:#f1f5f9; }
+QTableView { color:#172b4d; background:white; alternate-background-color:#f1f5f9; gridline-color:#e2e8f0; border:1px solid #cbd5e1; selection-background-color:#dbeafe; selection-color:#0f172a; }
+QHeaderView::section { background:#e2e8f0; color:#334155; padding:8px; border:1px solid #cbd5e1; font-weight:600; }
+QGroupBox { background:#ffffff; border:1px solid #cbd5e1; border-radius:6px; margin-top:12px; padding:16px 12px 12px; font-weight:600; }
+QGroupBox::title { subcontrol-origin:margin; left:12px; padding:0 5px; color:#172b4d; }
+QGroupBox QLabel, QGroupBox QTableWidget { font-weight:400; }
+QScrollArea, QScrollArea > QWidget > QWidget { background:#f5f7fb; }
 QProgressBar { border: 1px solid #cbd5e1; border-radius: 4px; text-align: center; min-height: 22px; }
 QProgressBar::chunk { background: #7dd3fc; }
-QTextEdit { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 4px; }
+QTextEdit, QPlainTextEdit { color:#334155; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:4px; }
 '''
+
+
+def apply_theme(app):
+    app.setStyle('Fusion')
+    set_light_palette(app)
+    app.setStyleSheet(STYLE)

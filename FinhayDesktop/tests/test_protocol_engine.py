@@ -104,7 +104,10 @@ class FakeGateway:
         self.calls.append(symbol)
         if self.fail:
             raise AuthRequired('Cần đăng nhập lại')
-        return [corp(year, 1, 100, 10, 9)]
+        return [corp(year, q, 100, 10, 9) for q in (1, 4)]
+
+    async def call(self, name, args, refresh=False):
+        return {'sector': [{'name': 'Nhóm thử nghiệm', 'level': 3}]}, 'sample', True
 
 
 def test_scan_pause_resume_and_auth_failure_preserves_pending(tmp_path):

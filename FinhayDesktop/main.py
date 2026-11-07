@@ -15,10 +15,9 @@ def main():
     args = parser.parse_args()
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
-    from app.gui import MainWindow, STYLE
+    from app.gui import MainWindow, apply_theme
     app = QApplication(sys.argv[:1])
-    app.setStyle('Fusion')
-    app.setStyleSheet(STYLE)
+    apply_theme(app)
     window = MainWindow(args.data_dir)
     window.show()
     if args.smoke:

@@ -44,7 +44,7 @@ def test_q1_uses_previous_year_q4_and_exact_year():
     assert result['revenue_yoy_percent'] == 50
     missing = build_result('FPT', '', '', rows, 2025, 2, 'standalone')
     assert missing['status'] == 'missing'
-    assert 'revenue' not in missing
+    assert missing['revenue'] is None
 
 
 def test_cumulative_conversion_and_missing_previous():

@@ -226,7 +226,7 @@ class FinancialView(QWidget):
         super().__init__()
         self.model = FinancialModel()
         self.context = {}
-        self.setStyleSheet('QTableView { background: white; alternate-background-color: #fbfdff; selection-background-color: #dbeafe; selection-color: #0f172a; } QHeaderView::section { background: #edf2f7; color:#475569; border:0; border-bottom:1px solid #cbd5e1; padding:9px; }')
+        self.setStyleSheet('QTableView { color:#172b4d; background:white; alternate-background-color:#f1f5f9; selection-background-color:#dbeafe; selection-color:#0f172a; } QHeaderView::section { background:#e2e8f0; color:#334155; border:0; border-bottom:1px solid #b8c5d6; padding:9px; }')
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.heading = QLabel('Báo cáo tài chính')
@@ -278,6 +278,27 @@ class FinancialView(QWidget):
     def window_changed(self):
         self.model.set_window(self.window.currentData())
 
+    def snapshot(self):
+        return {'query': self.query.text(), 'primary': self.primary_only.isChecked(),
+                'unit': self.unit.currentIndex(), 'window': self.window.currentIndex(),
+                'end': self.model.end, 'at_latest': self.model.end == len(self.model.periods),
+                'horizontal': self.view.horizontalScrollBar().value(),
+                'vertical': self.view.verticalScrollBar().value()}
+
+    def restore_state(self, state=None):
+        state = state or {}
+        self.query.setText(state.get('query', ''))
+        self.primary_only.setChecked(state.get('primary', False))
+        self.unit.setCurrentIndex(state.get('unit', 0))
+        self.model.set_scale(self.unit.currentData())
+        self.window.setCurrentIndex(state.get('window', 0))
+        end = len(self.model.periods) if state.get('at_latest', True) else state.get('end', len(self.model.periods))
+        self.model.set_window(self.window.currentData(), end)
+        self.view.doItemsLayout()
+        self.view.frozen.doItemsLayout()
+        self.view.horizontalScrollBar().setValue(state.get('horizontal', 0))
+        self.view.verticalScrollBar().setValue(state.get('vertical', 0))
+
     def move(self, delta):
         self.model.set_window(self.model.window_size, self.model.end + delta)
 
@@ -295,6 +316,9 @@ class FinancialView(QWidget):
         self.next.setEnabled(bool(self.model.window_size and self.model.end < len(self.model.periods)))
         self.export_current.setEnabled(bool(self.model.metrics))
         self.export_all.setEnabled(bool(self.model.metrics))
+        if not self.model.records:
+            self.summary.setText('Finhay chưa có số liệu cho khoảng thời gian này.' if self.context.get('loaded') else 'Chưa tải báo cáo cho lựa chọn này. Bấm Lấy dữ liệu để tải. Các báo cáo đã tải ở lựa chọn khác vẫn được giữ lại.')
+            return
         span = f'{period_label(periods[0])} → {period_label(periods[-1])}' if periods else 'Chưa có số liệu'
         self.summary.setText(f'{span} · {len(self.model.metrics)} chỉ tiêu · Cột tên cố định khi cuộn ngang · “—”: thiếu dữ liệu · Số âm: màu đỏ · EPS giữ VND/cổ phiếu.\nSố liệu theo nguồn Finhay; chưa tự xác định quý riêng/lũy kế hoặc hợp nhất/riêng lẻ. Xuất file giữ giá trị gốc.')
 

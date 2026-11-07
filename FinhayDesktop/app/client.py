@@ -2,6 +2,8 @@ import asyncio
 import json
 import logging
 import time
+import re
+import math
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
@@ -29,10 +31,38 @@ ALLOWED = {
 }
 
 
+class ToolResponseError(RuntimeError):
+    pass
+
+
+class DataUnavailableError(ToolResponseError):
+    pass
+
+
+class RateLimitError(ToolResponseError):
+    def __init__(self, retry_after=2):
+        self.retry_after = max(0, float(retry_after))
+        super().__init__('Finhay đang giới hạn tốc độ. Kết quả đã tải được giữ lại; chờ rồi bấm Tiếp tục nếu tác vụ đã dừng.')
+
+
+def tool_error(text):
+    # Error content is classified, never echoed verbatim into logs or exports.
+    if re.search(r'rate\s*limit|too many requests|\b429\b', text, re.I):
+        retry = re.search(r'retry[ _-]*after[\s:=\"]+(\d+(?:\.\d+)?)', text, re.I)
+        return RateLimitError(float(retry.group(1)) if retry else 2)
+    if re.search(r'unauthorized|invalid[ _-]*token|token[ _-]*expired|authentication[ _-]*required', text, re.I):
+        return AuthRequired('Phiên đăng nhập Finhay hết hạn hoặc không còn quyền. Kết nối lại rồi tiếp tục lượt quét.')
+    if re.search(r'no (?:financial )?data(?: found| available)?|data not found|không có (?:dữ liệu|báo cáo)', text, re.I):
+        return DataUnavailableError('Finhay chưa có dữ liệu cho mã/kỳ này.')
+    return ToolResponseError('Finhay trả lỗi dữ liệu cho mã/kỳ này. Có thể thử lại mã lỗi sau.')
+
+
 def unpack(result):
     if result.isError:
-        # Do not persist or echo arbitrary server error text containing credentials.
-        raise RuntimeError('Finhay trả lỗi công cụ. Kiểm tra mã, kỳ và quyền truy cập rồi thử lại.')
+        text = ' '.join(getattr(content, 'text', '') for content in result.content)
+        if result.structuredContent:
+            text += json.dumps(result.structuredContent, ensure_ascii=False)
+        raise tool_error(text)
     if result.structuredContent is not None:
         return result.structuredContent
     for content in result.content:
@@ -185,16 +215,42 @@ class Gateway:
             data, stamp = cached
             return data, stamp, True
         actual = self.tool_name(name)
-        result = await self.session.call_tool(actual, args)
-        data = unpack(result)
+        from mcp.shared.exceptions import McpError
+        for attempt in range(4):
+            try:
+                try:
+                    result = await self.session.call_tool(actual, args)
+                except McpError as exc:
+                    classified = tool_error(str(exc))
+                    if isinstance(classified, (RateLimitError, DataUnavailableError, AuthRequired)):
+                        raise classified from exc
+                    raise
+                data = unpack(result)
+                break
+            except RateLimitError as exc:
+                if attempt == 3:
+                    raise
+                seconds = exc.retry_after if exc.retry_after > 0 else 2 ** attempt
+                self.notify(f'Finhay giới hạn tốc độ. Chờ {math.ceil(seconds)} giây rồi tự thử lại…')
+                await self.wait_cooldown(seconds + .25)
         self.store.save_response(name, args, data)
         return data, now(), False
+
+    async def wait_cooldown(self, seconds):
+        deadline = asyncio.get_running_loop().time() + seconds
+        while asyncio.get_running_loop().time() < deadline:
+            if self.cancelled():
+                raise asyncio.CancelledError()
+            await asyncio.sleep(min(.2, max(0, deadline - asyncio.get_running_loop().time())))
 
     async def statements(self, symbol, report, period, year, refresh):
         rows = []
         for page in range(1, 5):
-            data, stamp, cached = await self.call('get_financial_statement', dict(symbol=symbol, type=report,
-                period=period, year=year, limit=5, page=page), refresh)
+            try:
+                data, stamp, cached = await self.call('get_financial_statement', dict(symbol=symbol, type=report,
+                    period=period, year=year, limit=5, page=page), refresh)
+            except DataUnavailableError:
+                break
             items = data.get('items', [])
             rows.extend({**row, '_fetched_at': stamp, '_cached': cached} for row in items)
             if len(items) < 5:
@@ -263,6 +319,8 @@ def leaf_errors(exc):
 
 def user_error(exc):
     for error in leaf_errors(exc):
+        if isinstance(error, ToolResponseError):
+            return str(error)
         if isinstance(error, AuthRequired):
             return str(error)
         if isinstance(error, httpx.HTTPStatusError) and error.response.status_code in (401, 403):

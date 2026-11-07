@@ -9,6 +9,8 @@ PATTERNS = (
      'loinhuansauthue', 'codongcuacongtyme'),
     ('securities', 'Doanh thu hoạt động', 'doanhthuhoatdong',
      'lnsauthue', 'lnsauthuecuachusohuu'),
+    ('insurance', 'Doanh thu thuần (bảo hiểm)', 'doanhthuthuan',
+     'lnstthunhapdn', 'lnstcuacongtyme'),
 )
 
 
@@ -74,33 +76,59 @@ def resolve_quarter(rows, year, quarter, basis):
 
 
 def build_result(symbol, name, exchange, rows, year, quarter, basis):
-    raw = exact_row(rows, year, quarter)
+    def label(y, q):
+        return f'Q{q}/{y}' if q else str(y)
+
+    py, pq = previous_period(year, quarter) if quarter else (year - 1, None)
+    targets = {'current': (year, quarter), 'previous': (py, pq), 'year_ago': (year - 1, quarter)}
+    source, values = {}, {}
+    for key, (y, q) in targets.items():
+        raw = exact_row(rows, y, q)
+        # Unknown basis is shown explicitly as returned, never compared as a quarter.
+        row = (raw if basis == 'unknown' else resolve_quarter(rows, y, q, basis)) if q else raw
+        source[key] = row
+        values[key] = normalize(row) if row is not None else normalize({})
+    current = values['current']
     base = dict(symbol=symbol, name=name, exchange=exchange, year=year, quarter=quarter,
-                period_basis=basis if quarter else 'annual', currency='VND', report_scope='Nguồn chưa xác định')
-    if raw is None:
-        return {**base, 'status': 'missing', 'message': 'Không có kỳ được chọn'}
-    current = resolve_quarter(rows, year, quarter, basis) if quarter else raw
-    # An unverified quarter can be displayed as returned, but is never used for growth.
-    val = normalize(current if current is not None else raw)
-    base.update(val)
-    if val['kind'] == 'unknown':
-        return {**base, 'status': 'missing', 'message': 'Chưa nhận diện mẫu báo cáo'}
-    incomplete = any(val[k] is None for k in ('revenue', 'profit', 'parent_profit'))
-    base.update(status='missing' if incomplete else 'ok', message='Thiếu chỉ tiêu' if incomplete else '')
-    if quarter and basis == 'unknown':
-        base.update(status='missing', message='Chưa xác minh quý riêng/lũy kế; số hiển thị là số nguồn trả về')
-    elif quarter and current is None:
-        base.update(status='missing', revenue=None, profit=None, parent_profit=None, message='Thiếu kỳ để tách lũy kế')
-    targets = [('yoy', year - 1, quarter)]
-    if quarter:
-        py, pq = previous_period(year, quarter)
-        targets.append(('qoq', py, pq))
-    for prefix, by, bq in targets:
-        old = resolve_quarter(rows, by, bq, basis) if bq else exact_row(rows, by, None)
-        normalized = normalize(old) if old else {}
-        for key in ('revenue', 'profit', 'parent_profit'):
-            comparable = current is not None and old is not None and normalized.get('kind') == val['kind']
-            comp = comparison(base.get(key) if comparable else None, normalized.get(key))
+                period_basis=basis if quarter else 'annual', currency='VND', report_scope='Nguồn chưa xác định',
+                schema_version=2, period_label=label(year, quarter),
+                previous_period_label=label(py, pq), year_ago_period_label=label(year - 1, quarter), **current)
+    for metric in ('revenue', 'profit', 'parent_profit'):
+        base[f'{metric}_previous'] = values['previous'][metric]
+        base[f'{metric}_year_ago'] = values['year_ago'][metric]
+    messages = []
+    if exact_row(rows, year, quarter) is None:
+        messages.append('Không có kỳ được chọn')
+    elif quarter and basis == 'unknown':
+        messages.append('Chưa xác minh quý riêng/lũy kế; số hiển thị là số nguồn trả về')
+    elif source['current'] is None:
+        messages.append('Thiếu kỳ để tách lũy kế')
+    elif current['kind'] == 'unknown':
+        messages.append('Chưa nhận diện mẫu báo cáo')
+    elif any(current[k] is None for k in ('revenue', 'profit')):
+        messages.append('Thiếu doanh thu hoặc LNST kỳ hiện tại')
+    for key, description in (('previous', 'kỳ trước'), ('year_ago', 'cùng kỳ năm trước')):
+        if key == 'previous' and not quarter:
+            continue
+        if any(values[key][metric] is None for metric in ('revenue', 'profit')):
+            messages.append(f'Thiếu số liệu {description}')
+        elif current['kind'] != 'unknown' and current['kind'] != values[key]['kind']:
+            messages.append(f'Mẫu báo cáo {description} khác kỳ hiện tại; không tính %')
+    for prefix, target in [('yoy', 'year_ago')] + ([('qoq', 'previous')] if quarter else []):
+        old = values[target]
+        comparable = (not quarter or basis in ('standalone', 'cumulative')) and current['kind'] != 'unknown' and old['kind'] == current['kind']
+        for metric in ('revenue', 'profit', 'parent_profit'):
+            comp = comparison(current[metric] if comparable else None, old[metric])
             for field, value in comp.items():
-                base[f'{key}_{prefix}_{field}'] = value
+                base[f'{metric}_{prefix}_{field}'] = value
+    base.update(status='missing' if messages else 'ok', message='; '.join(dict.fromkeys(messages)))
     return base
+
+
+def sector_info(profile):
+    path = [row for row in (profile.get('sector') or []) if isinstance(row, dict) and row.get('name')]
+    top = next((row for row in path if row.get('level') == 1), None)
+    group = next((row for row in path if row.get('level') == 3), None)
+    group = group or (path[-1] if path else {})
+    return {'sector_group': group.get('name'), 'sector_name': (top or {}).get('name'),
+            'sector_slug': group.get('slug'), 'sector_level': group.get('level')}

@@ -7,8 +7,8 @@ from datetime import datetime
 from PySide6.QtCore import QThread, Signal
 
 from .auth import AuthRequired
-from .client import Gateway, leaf_errors, user_error
-from .finance import build_result
+from .client import Gateway, leaf_errors, user_error, RateLimitError
+from .finance import build_result, sector_info
 from .storage import now
 
 
@@ -21,6 +21,9 @@ def items_of(data):
         if isinstance(data.get(key), list):
             return data[key]
     return [data]
+
+
+REPORTS = {'income-statement': 'Kết quả kinh doanh', 'balance-sheet': 'Cân đối kế toán', 'cash-flow': 'Lưu chuyển tiền tệ'}
 
 
 class Worker(QThread):
@@ -42,7 +45,7 @@ class Worker(QThread):
         try:
             asyncio.run(self.execute())
         except asyncio.CancelledError:
-            self.message.emit('Đã hủy trước khi hoàn tất chuẩn bị danh sách mã.')
+            self.message.emit('Đã tạm dừng; các kết quả đã hoàn tất được giữ lại.')
         except Exception as exc:
             self.failed.emit(user_error(exc))
 
@@ -69,18 +72,13 @@ class Worker(QThread):
             for tool in ('get_stock_profile', 'get_stock_listing', 'get_company_overview'):
                 data, stamp, cached = await gateway.call(tool, {'symbol': symbol}, refresh)
                 tables.append({'group': tool, 'data': data})
-                stamps.append(f'{tool}: {stamp}' + (' • đã lưu' if cached else ' • mới lấy'))
+                title = {'get_stock_profile': 'Hồ sơ doanh nghiệp', 'get_stock_listing': 'Thông tin niêm yết', 'get_company_overview': 'Chỉ số tài chính'}[tool]
+                stamps.append(f'{title}: {stamp}' + (' • đã lưu' if cached else ' • mới lấy'))
             rows = [dict(nhom=t['group'], chi_tieu=k, gia_tri=v) for t in tables for k, v in t['data'].items()]
-            result = {'rows': rows}
+            result = {'rows': rows, 'overview': {key: table['data'] for key, table in zip(('profile', 'listing', 'metrics'), tables)}}
         elif section == 'financial':
-            rows = []
-            for year in range(c['from_year'], c['to_year'] + 1):
-                if self.stop_event.is_set():
-                    break
-                self.message.emit(f'Đang lấy {symbol} — năm {year}…')
-                rows.extend(await gateway.statements(symbol, c['report'], c['period'], year, refresh))
-            rows.sort(key=lambda row: (row.get('year', 0), row.get('quarter') or 0), reverse=True)
-            result = {'rows': rows}
+            await self.financial_bundle(gateway)
+            return
         elif section == 'price':
             quote, stamp, cached = await gateway.call('get_stock_quote', {'symbol': symbol}, True)
             data, history_stamp, history_cached = await gateway.call('get_stock_history', {
@@ -107,10 +105,60 @@ class Worker(QThread):
         result.update(symbol=symbol, section=section, stamp='\n'.join(stamps) if stamps else now(), config=c)
         self.result.emit(result)
 
+    async def financial_bundle(self, gateway):
+        """One connection, all six report/period variants, selected view first.
+
+        Only complete variants enter the GUI cache. Individual source/tool errors
+        do not discard successful variants; authentication/connection errors stop
+        the batch so the normal reconnect UI can handle them.
+        """
+        import httpx
+        from mcp.client.auth.exceptions import OAuthFlowError
+
+        c = self.config
+        reports = [c['report'], *(report for report in REPORTS if report != c['report'])]
+        periods = [c['period'], 'annual' if c['period'] == 'quarterly' else 'quarterly']
+        variants = [(report, period) for report in reports for period in periods]
+        completed, failures = 0, []
+        self.progress.emit(0, len(variants))
+        for index, (report, period) in enumerate(variants, 1):
+            if self.stop_event.is_set():
+                break
+            rows = []
+            period_name = 'Quý' if period == 'quarterly' else 'Năm'
+            try:
+                for year in range(c['from_year'], c['to_year'] + 1):
+                    if self.stop_event.is_set():
+                        break
+                    self.message.emit(f'{c["symbol"]} · {REPORTS[report]} · {period_name} · {year} ({index}/6)')
+                    rows.extend(await gateway.statements(c['symbol'], report, period, year, c['refresh']))
+            except Exception as exc:
+                if self.stop_event.is_set():
+                    break
+                if any(isinstance(error, (AuthRequired, RateLimitError, OAuthFlowError, httpx.TransportError, httpx.HTTPStatusError)) for error in leaf_errors(exc)):
+                    raise
+                error = {'report': report, 'period': period, 'message': user_error(exc)}
+                failures.append(error)
+                self.message.emit(f'{REPORTS[report]} · {period_name}: chưa tải được. {error["message"]}')
+                self.progress.emit(index, len(variants))
+                continue
+            if self.stop_event.is_set():
+                break
+            rows.sort(key=lambda row: (row.get('year', 0), row.get('quarter') or 0), reverse=True)
+            self.result.emit({'section': 'financial', 'symbol': c['symbol'], 'rows': rows, 'stamp': now(),
+                              'config': {**c, 'report': report, 'period': period}})
+            completed += 1
+            self.progress.emit(index, len(variants))
+        self.result.emit({'kind': 'financial_summary', 'symbol': c['symbol'], 'completed': completed,
+                          'total': len(variants), 'failed': failures, 'cancelled': self.stop_event.is_set()})
+
     async def scan(self, gateway):
         run_id = self.config.get('run_id')
         if run_id:
             config = self.store.config(run_id)
+            upgraded = self.store.requeue_outdated(run_id, 2)
+            if upgraded:
+                self.message.emit(f'Đã đưa {upgraded} kết quả cũ vào hàng chờ để bổ sung các kỳ so sánh và nhóm ngành.')
         else:
             config = dict(self.config)
             self.message.emit('Đang lấy danh sách cổ phiếu…')
@@ -136,6 +184,8 @@ class Worker(QThread):
         self.result.emit({'run_id': run_id, 'started': True})
         jobs = self.store.jobs(run_id)
         done = sum(job['status'] != 'pending' for job in jobs)
+        consecutive_errors = 0
+        circuit_paused = False
         self.progress.emit(done, len(jobs))
         for job in jobs:
             if self.stop_event.is_set():
@@ -151,6 +201,20 @@ class Worker(QThread):
                 meta = config['universe'][symbol]
                 result = build_result(symbol, meta.get('name', ''), meta.get('exchange', ''), rows,
                                       config['year'], config['quarter'], config['basis'])
+                try:
+                    # Company classification is reused across scans to avoid an
+                    # extra classification request for every repeated scan.
+                    profile, profile_stamp, _ = await gateway.call('get_stock_profile', {'symbol': symbol}, False)
+                    result.update(sector_info(profile), sector_fetched_at=profile_stamp)
+                    if not result.get('sector_group'):
+                        result.update(status='missing', message='; '.join(filter(None, (result['message'], 'Finhay chưa có nhóm ngành'))))
+                except Exception as exc:
+                    import httpx
+                    from mcp.client.auth.exceptions import OAuthFlowError
+                    if any(isinstance(e, (AuthRequired, RateLimitError, OAuthFlowError, httpx.TransportError, httpx.HTTPStatusError)) for e in leaf_errors(exc)):
+                        raise
+                    result.update(sector_group=None, status='missing', message='; '.join(filter(None, (result['message'], 'Chưa lấy được nhóm ngành'))))
+                    self.message.emit(f'{symbol}: giữ số liệu tài chính; nhóm ngành chưa lấy được. {user_error(exc)}')
                 target = next((r for r in rows if r.get('year') == config['year'] and r.get('quarter') == config['quarter']), {})
                 result['fetched_at'] = target.get('_fetched_at')
                 result['processed_at'] = now()
@@ -158,6 +222,7 @@ class Worker(QThread):
                 result['cache_policy'] = 'refresh' if config['refresh'] else 'prefer_cache'
                 self.store.finish(run_id, symbol, result['status'], result)
                 self.row_ready.emit(result)
+                consecutive_errors = 0
             except Exception as exc:
                 if self.stop_event.is_set():
                     break
@@ -165,12 +230,21 @@ class Worker(QThread):
                 # Authentication and transport failures pause the run with job pending.
                 import httpx
                 from mcp.client.auth.exceptions import OAuthFlowError
-                if any(isinstance(e, (AuthRequired, OAuthFlowError, httpx.TransportError, httpx.HTTPStatusError)) for e in leaves):
+                if any(isinstance(e, (AuthRequired, RateLimitError, OAuthFlowError, httpx.TransportError, httpx.HTTPStatusError)) for e in leaves):
                     raise
-                result = {'symbol': symbol, 'status': 'error', 'message': user_error(exc)}
+                meta = config['universe'].get(symbol, {})
+                result = build_result(symbol, meta.get('name', ''), meta.get('exchange', ''), [], config['year'], config['quarter'], config['basis'])
+                result.update(status='error', message=user_error(exc), error_kind=type(leaves[0]).__name__)
                 self.store.finish(run_id, symbol, 'error', result)
                 self.row_ready.emit(result)
+                self.message.emit(f'{symbol}: {result["message"]}')
+                consecutive_errors += 1
             done += 1
             self.progress.emit(done, len(jobs))
+            if consecutive_errors >= 3:
+                circuit_paused = True
+                self.message.emit('Tạm dừng sau 3 mã lỗi liên tiếp để tránh ghi lỗi hàng loạt. Kiểm tra kết nối/nguồn rồi thử lại các mã lỗi.')
+                break
             await asyncio.sleep(.3)
-        self.result.emit({'run_id': run_id, 'paused': self.stop_event.is_set(), 'finished': True})
+        self.result.emit({'run_id': run_id, 'paused': self.stop_event.is_set() or circuit_paused, 'finished': True,
+                          'reason': 'Có 3 mã lỗi liên tiếp; các mã chưa chạy vẫn nằm trong hàng chờ.' if circuit_paused else ''})

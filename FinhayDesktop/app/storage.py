@@ -67,6 +67,14 @@ class Store:
         with self.lock, self.db:
             self.db.execute("UPDATE jobs SET status='pending' WHERE run_id=? AND status='error'", (run_id,))
 
+    def requeue_outdated(self, run_id, version):
+        """Retain old results until replaced, but enrich legacy runs on resume."""
+        with self.lock, self.db:
+            rows = self.db.execute("SELECT symbol,result FROM jobs WHERE run_id=? AND status!='pending'", (run_id,)).fetchall()
+            symbols = [row['symbol'] for row in rows if json.loads(row['result'] or '{}').get('schema_version', 0) < version]
+            self.db.executemany("UPDATE jobs SET status='pending' WHERE run_id=? AND symbol=?", [(run_id, symbol) for symbol in symbols])
+        return len(symbols)
+
     def close(self):
         with self.lock:
             self.db.close()

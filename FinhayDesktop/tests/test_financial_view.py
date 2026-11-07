@@ -99,16 +99,19 @@ def test_filter_frozen_label_and_transposed_export(qt_app, tmp_path):
     view.close()
 
 
-def test_report_switch_clears_old_matrix(qt_app, tmp_path):
+def test_unloaded_selection_is_empty_but_loaded_report_returns(qt_app, tmp_path):
     window = MainWindow(tmp_path)
     matrix = window.lookup_tables['financial']
-    matrix.set_records([statement(2025, 1, 1)])
+    window.on_result('lookup', {'section': 'financial', 'symbol': 'FPT', 'stamp': 'sample', 'rows': [statement(2025, 1, 1)]})
     window.report_tabs.setCurrentIndex(1)
     assert window.report.currentData() == 'balance-sheet'
     assert matrix.model.records == []
-    matrix.set_records([statement(2025, 1, 1)])
+    window.report_tabs.setCurrentIndex(0)
+    assert matrix.model.records[0]['doanhthuthuanvebanhangvacungcapdichvu'] == 1
     window.period.setCurrentIndex(1)
     assert matrix.model.records == []
+    window.period.setCurrentIndex(0)
+    assert matrix.model.records[0]['doanhthuthuanvebanhangvacungcapdichvu'] == 1
     window.close()
 
 
